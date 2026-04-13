@@ -16,6 +16,7 @@ class DisplayManager {
                              uint8_t progressPercent = 0, bool showFooter = true);
   void renderMenu(const char *const *items, size_t itemCount, size_t selectedIndex);
   void renderMenu(const std::vector<String> &items, size_t selectedIndex);
+  void renderStatus(const String &title, const String &line1 = "", const String &line2 = "");
 
  private:
   bool initPanel();

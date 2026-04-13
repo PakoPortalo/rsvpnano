@@ -10,6 +10,7 @@
 #include "input/TouchHandler.h"
 #include "reader/ReadingLoop.h"
 #include "storage/StorageManager.h"
+#include "usb/UsbMassStorageManager.h"
 
 class App {
  public:
@@ -59,6 +60,9 @@ class App {
   void selectBookPickerItem(uint32_t nowMs);
   void openChapterPicker();
   void selectChapterPickerItem(uint32_t nowMs);
+  void enterUsbTransfer(uint32_t nowMs);
+  void updateUsbTransfer(uint32_t nowMs);
+  void exitUsbTransfer(uint32_t nowMs);
   void enterSleep(uint32_t nowMs);
   void wakeFromSleep();
   bool restoreSavedBook(uint32_t nowMs);
@@ -92,6 +96,7 @@ class App {
   ButtonHandler button_;
   TouchHandler touch_;
   StorageManager storage_;
+  UsbMassStorageManager usbTransfer_;
   Preferences preferences_;
   PausedTouchSession pausedTouch_;
   TouchIntent pausedTouchIntent_ = TouchIntent::None;

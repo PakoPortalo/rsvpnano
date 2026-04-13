@@ -702,3 +702,32 @@ void DisplayManager::renderMenu(const std::vector<String> &items, size_t selecte
 
   flushScaledFrame(scale, virtualWidth, virtualHeight);
 }
+
+void DisplayManager::renderStatus(const String &title, const String &line1, const String &line2) {
+  const String renderKey = "status|" + title + "|" + line1 + "|" + line2;
+  if (!initialized_ || renderKey == lastRenderKey_) {
+    return;
+  }
+
+  lastRenderKey_ = renderKey;
+
+  const int scale = 1;
+  const int virtualWidth = kDisplayWidth;
+  const int virtualHeight = kDisplayHeight;
+  const int titleY = std::max(0, (virtualHeight - kBaseGlyphHeight) / 2 - 26);
+  const int line1Y = std::min(virtualHeight - kTinyGlyphHeight * kTinyScale,
+                              titleY + kBaseGlyphHeight + 22);
+  const int line2Y = std::min(virtualHeight - kTinyGlyphHeight * kTinyScale,
+                              line1Y + kTinyGlyphHeight * kTinyScale + 10);
+
+  clearVirtualBuffer(virtualWidth, virtualHeight);
+  drawWordLine(title, titleY, kWordColor);
+  if (!line1.isEmpty()) {
+    drawTinyTextCentered(line1, line1Y, kMenuDimColor, kTinyScale);
+  }
+  if (!line2.isEmpty()) {
+    drawTinyTextCentered(line2, line2Y, kFocusLetterColor, kTinyScale);
+  }
+
+  flushScaledFrame(scale, virtualWidth, virtualHeight);
+}

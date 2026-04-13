@@ -29,6 +29,7 @@ enum MenuItem : size_t {
   MenuChapters,
   MenuRestart,
   MenuChangeBook,
+  MenuUsbTransfer,
   MenuSleep,
   MenuItemCount,
 };
@@ -38,6 +39,7 @@ constexpr const char *kMenuItems[] = {
     "Chapters",
     "Restart",
     "Change book",
+    "USB transfer",
     "Sleep",
 };
 
@@ -153,6 +155,8 @@ const char *App::stateName(AppState state) const {
       return "Playing";
     case AppState::Menu:
       return "Menu";
+    case AppState::UsbTransfer:
+      return "UsbTransfer";
     case AppState::Sleeping:
       return "Sleeping";
   }
@@ -197,6 +201,9 @@ void App::setState(AppState nextState, uint32_t nowMs) {
     case AppState::Menu:
       renderMenu();
       break;
+    case AppState::UsbTransfer:
+      display_.renderStatus("USB", "Preparing SD", "Eject when done");
+      break;
     case AppState::Sleeping:
       display_.renderCenteredWord("SLEEP");
       break;
@@ -221,6 +228,11 @@ void App::updateState(uint32_t nowMs) {
     }
 
     setState(button_.isHeld() ? AppState::Playing : AppState::Paused, nowMs);
+    return;
+  }
+
+  if (state_ == AppState::UsbTransfer) {
+    updateUsbTransfer(nowMs);
     return;
   }
 
@@ -284,7 +296,8 @@ void App::handleTouch(uint32_t nowMs) {
     return;
   }
 
-  if (state_ == AppState::Playing || state_ == AppState::Booting || state_ == AppState::Sleeping) {
+  if (state_ == AppState::Playing || state_ == AppState::Booting ||
+      state_ == AppState::UsbTransfer || state_ == AppState::Sleeping) {
     // Touch is intentionally disabled during playback so it cannot interfere with timing.
     touch_.cancel();
     pausedTouch_.active = false;
@@ -526,6 +539,9 @@ void App::selectMenuItem(uint32_t nowMs) {
     case MenuSleep:
       enterSleep(nowMs);
       return;
+    case MenuUsbTransfer:
+      enterUsbTransfer(nowMs);
+      return;
     case MenuChapters:
       openChapterPicker();
       return;
@@ -680,6 +696,66 @@ void App::selectChapterPickerItem(uint32_t nowMs) {
   Serial.printf("[chapter-picker] jumped to %s at word %u\n",
                 chapterMarkers_[chapterIndex].title.c_str(),
                 static_cast<unsigned int>(chapterMarkers_[chapterIndex].wordIndex));
+}
+
+void App::enterUsbTransfer(uint32_t nowMs) {
+  Serial.println("[app] entering USB transfer mode");
+  saveReadingPosition(true);
+  pausedTouch_.active = false;
+  pausedTouchIntent_ = TouchIntent::None;
+  wpmFeedbackVisible_ = false;
+  setState(AppState::UsbTransfer, nowMs);
+
+  storage_.end();
+  if (!usbTransfer_.begin(true)) {
+    Serial.printf("[app] USB transfer failed: %s\n", usbTransfer_.statusMessage());
+    display_.renderStatus("USB", "SD not ready", "Returning");
+    const bool storageReady = storage_.begin();
+    if (storageReady) {
+      storage_.listBooks();
+    }
+    setState(AppState::Paused, nowMs);
+    return;
+  }
+
+  const uint64_t sizeMb = usbTransfer_.cardSizeBytes() / (1024ULL * 1024ULL);
+  Serial.printf("[app] USB transfer active (%llu MB). Eject from computer when finished.\n",
+                sizeMb);
+  display_.renderStatus("USB", "Copy books now", "Eject when done");
+}
+
+void App::updateUsbTransfer(uint32_t nowMs) {
+  if (!usbTransfer_.active()) {
+    return;
+  }
+
+  if (!usbTransfer_.ejected()) {
+    return;
+  }
+
+  exitUsbTransfer(nowMs);
+}
+
+void App::exitUsbTransfer(uint32_t nowMs) {
+  Serial.println("[app] USB transfer ejected; remounting SD");
+  display_.renderStatus("USB", "Remounting SD", "");
+  usbTransfer_.end();
+
+  const bool storageReady = storage_.begin();
+  if (storageReady) {
+    storage_.listBooks();
+    const int refreshedBookIndex = findBookIndexByPath(currentBookPath_);
+    if (refreshedBookIndex >= 0) {
+      currentBookIndex_ = static_cast<size_t>(refreshedBookIndex);
+    } else if (storage_.bookCount() > 0) {
+      loadBookAtIndex(0, nowMs);
+    }
+  } else {
+    Serial.println("[app] SD remount failed after USB transfer");
+  }
+
+  menuScreen_ = MenuScreen::Main;
+  setState(AppState::Paused, nowMs);
 }
 
 void App::enterSleep(uint32_t nowMs) {
