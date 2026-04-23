@@ -459,7 +459,7 @@ void App::updateState(uint32_t nowMs) {
   }
 
   if (state_ == AppState::Menu || state_ == AppState::Sleeping) {
-    // TODO: Add richer Menu and Sleeping transition rules once those product milestones start.
+    // Menu and sleeping state changes are driven by direct input and power events.
     return;
   }
 
@@ -876,7 +876,7 @@ void App::applyPausedTouchGesture(const TouchEvent &event, uint32_t nowMs) {
     pausedTouchIntent_ = TouchIntent::None;
   }
 
-  // TODO: Add paused-state tap behavior only if the product needs it.
+  // Paused taps are intentionally ignored unless they become part of the UX.
 }
 
 int App::scrubStepsForDrag(int deltaX) const {

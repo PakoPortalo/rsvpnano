@@ -1,74 +1,30 @@
 # RSVP Nano
 
-RSVP Nano is a small ESP32-S3 speed-reading device for reading books one word at a time using RSVP (rapid serial visual presentation). The firmware focuses on stable word anchoring, readable typography, adjustable pacing, SD card storage, and local book conversion.
+RSVP Nano is an open-source ESP32-S3 reading device for showing text one word at a time with RSVP (Rapid Serial Visual Presentation). The firmware is built around stable anchor-letter rendering, readable typography, tunable pacing, SD card storage, and local EPUB conversion.
 
-This repository is currently a hardware/firmware beta. It is usable, but the board wiring and display driver are still specific to the current prototype.
+## Highlights
 
-The project is open source under the MIT License.
-
-## Current Features
-
-- RSVP reader with focused anchor-letter rendering.
-- Adjustable typography, anchor position, guide marks, and word pacing.
+- One-word RSVP reader with stable anchor alignment.
+- Adjustable typography, anchor guides, pacing, and phantom words.
 - Chapter and paragraph-aware navigation.
 - SD card library under `/books`.
-- Local on-device EPUB conversion to `.rsvp` cache files.
-- Desktop SD-card converter for EPUB, text, Markdown, and HTML sources.
-- USB mass-storage transfer mode for copying books to the SD card.
-- Battery status, light sleep, and power-hold handling for the current board.
+- Local on-device EPUB conversion to cached `.rsvp` files.
+- USB mass-storage mode for copying books to the SD card.
+- Browser-based firmware installation with no IDE required.
 
-## Hardware Target
+## Getting Started
 
-The current firmware target is an ESP32-S3 board profile with:
+### Flash From The Browser
 
-- ESP32-S3, 16 MB flash, OPI PSRAM.
-- AXS15231B-based 172 x 640 LCD panel used in landscape as 640 x 172.
-- SD card wired through `SD_MMC`.
-- Touch and board power control pins defined in `src/board/BoardConfig.h`.
+The easiest way to install the firmware is the web flasher:
 
-Pin assignments are in `src/board/BoardConfig.h`. If you are building different hardware, start there and expect to update the display, touch, power, and SD wiring.
+<https://ionutdecebal.github.io/rsvpnano/>
 
-## Build And Flash
+Use Chrome or Edge on desktop, connect the device over USB, and follow the installer prompts.
 
-### Browser Flasher
+The browser flasher uses ESP Web Tools and Web Serial, so it must be opened over HTTPS or localhost.
 
-For most people, the easiest route is the browser flasher in `web/index.html`. When published with GitHub Pages, it lets someone flash the firmware from Chrome or Edge without installing VS Code, PlatformIO, or Python.
-
-The flasher uses ESP Web Tools and Web Serial. It requires HTTPS or localhost.
-
-To build the merged firmware binaries used by the web flasher:
-
-```sh
-python3 tools/export_web_firmware.py
-```
-
-That script builds the released firmware image and writes:
-
-```text
-web/firmware/rsvp-nano.bin
-```
-
-The `.bin` files are ignored locally; the GitHub Pages workflow generates and publishes them automatically.
-
-### Developer Build
-
-Install PlatformIO Core, then from the repository root:
-
-```sh
-pio run
-pio run -t upload
-pio device monitor
-```
-
-The default environment is:
-
-```text
-waveshare_esp32s3_usb_msc
-```
-
-Serial monitor runs at `115200`.
-
-## SD Card Layout
+### Add Books
 
 Create a `books` folder at the root of the SD card:
 
@@ -78,9 +34,9 @@ Create a `books` folder at the root of the SD card:
   another-book.rsvp
 ```
 
-The firmware prioritizes `.rsvp` files. EPUB files appear in the library only while they do not have a matching `.rsvp` cache beside them. When you open an EPUB, the device shows `Preparing book`, converts it locally, writes a `.rsvp` file, and then loads that cached version on future opens.
+The firmware prioritizes `.rsvp` files. If a matching `.rsvp` file does not exist yet, an EPUB appears in the library and is converted locally the first time it is opened. The converted `.rsvp` file is then reused on future launches.
 
-Conversion sidecar files may appear if a conversion is interrupted:
+If a conversion is interrupted, you may see sidecar files such as:
 
 ```text
 .rsvp.tmp
@@ -88,11 +44,46 @@ Conversion sidecar files may appear if a conversion is interrupted:
 .rsvp.failed
 ```
 
-If you are actively testing conversion, the serial monitor is the best debugging view.
+## Build From Source
 
-## Desktop Converter
+Install PlatformIO Core, then run:
 
-For faster or pre-flight conversion, copy the helper files from `tools/sd_card_converter` to the SD card root and run the launcher for your computer:
+```sh
+pio run
+pio run -t upload
+pio device monitor
+```
+
+The default environment is `waveshare_esp32s3_usb_msc`, which includes the reader and USB transfer mode.
+
+Serial monitor runs at `115200`.
+
+To export the merged binary used by the browser flasher:
+
+```sh
+python3 tools/export_web_firmware.py
+```
+
+That command writes:
+
+```text
+web/firmware/rsvp-nano.bin
+```
+
+## Hardware
+
+The current firmware configuration targets:
+
+- ESP32-S3 with 16 MB flash and OPI PSRAM.
+- AXS15231B-based 172 x 640 LCD panel used in landscape as 640 x 172.
+- SD card connected through `SD_MMC`.
+- Touch, battery, and board power control pins defined in `src/board/BoardConfig.h`.
+
+If you are adapting the project to different hardware, start with `src/board/BoardConfig.h`, then review the display, touch, power, and SD wiring code.
+
+## Desktop Book Conversion
+
+If you prefer to pre-convert books on a computer, copy the helper files from `tools/sd_card_converter` to the SD card root and run the launcher for your platform:
 
 - Windows: `Convert books.bat`
 - macOS: `Convert books.command`
@@ -100,7 +91,7 @@ For faster or pre-flight conversion, copy the helper files from `tools/sd_card_c
 
 The desktop converter scans `/books` and creates `.rsvp` files beside supported sources.
 
-Supported desktop input formats:
+Supported input formats:
 
 - `.epub`
 - `.txt`
@@ -109,7 +100,7 @@ Supported desktop input formats:
 
 ## RSVP File Format
 
-`.rsvp` files are plain text. The reader understands a few simple directives:
+`.rsvp` files are plain text. The reader understands a small set of directives:
 
 ```text
 @rsvp 1
@@ -122,6 +113,10 @@ Supported desktop input formats:
 
 Normal text lines after the directives are split into words by the firmware.
 
-## Project Status
+## Contributing
 
-This is a fast-moving prototype repo. Before a broader public release, choose and add a license, confirm the exact hardware revision, and run the release checklist in `docs/RELEASE_CHECKLIST.md`.
+Issues, experiments, forks, and pull requests are welcome. If you change hardware mappings, build environments, or the flashing flow, please update the relevant docs alongside the code.
+
+## License
+
+MIT. See [LICENSE](LICENSE).
