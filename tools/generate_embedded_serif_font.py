@@ -2,14 +2,21 @@
 
 from __future__ import annotations
 
+import argparse
+import math
+import os
 import pathlib
 import subprocess
 import tempfile
 
 
-FONT_NAME = "DejaVuSerif"
-FONT_SEARCH_PATHS = ["/usr/share/fonts/truetype/dejavu"]
-POINT_SIZE = 52
+DEFAULT_FONT_NAME = "NotoSans"
+DEFAULT_FONT_SEARCH_PATHS = [
+    "/usr/share/fonts/truetype/noto",
+    "/usr/share/fonts/truetype/dejavu",
+    "/usr/share/fonts/truetype/liberation",
+]
+DEFAULT_POINT_SIZE = 52
 CANVAS_WIDTH = 112
 CANVAS_HEIGHT = 128
 ORIGIN_X = 10
@@ -20,7 +27,37 @@ FONT_BOTTOM_PADDING = 2
 FIRST_CHAR = 32
 LAST_CHAR = 126
 SPACE_ADVANCE = 6
-OUTPUT_PATH = pathlib.Path("src/display/EmbeddedSerifFont.h")
+DEFAULT_OUTPUT_PATH = pathlib.Path("src/display/EmbeddedSerifFont.h")
+DEFAULT_SYMBOL_PREFIX = "EmbeddedSerif"
+
+
+def parse_args() -> argparse.Namespace:
+    parser = argparse.ArgumentParser(
+        description="Generate an embedded font header for the display renderer."
+    )
+    parser.add_argument(
+        "--point-size",
+        type=int,
+        default=DEFAULT_POINT_SIZE,
+        help=f"Source font point size. Default: {DEFAULT_POINT_SIZE}",
+    )
+    parser.add_argument(
+        "--font-name",
+        default=DEFAULT_FONT_NAME,
+        help=f"PostScript font name. Default: {DEFAULT_FONT_NAME}",
+    )
+    parser.add_argument(
+        "--output",
+        type=pathlib.Path,
+        default=DEFAULT_OUTPUT_PATH,
+        help=f"Output header path. Default: {DEFAULT_OUTPUT_PATH}",
+    )
+    parser.add_argument(
+        "--symbol-prefix",
+        default=DEFAULT_SYMBOL_PREFIX,
+        help=f"Prefix for generated struct/constants. Default: {DEFAULT_SYMBOL_PREFIX}",
+    )
+    return parser.parse_args()
 
 
 def escape_postscript_char(ch: str) -> str:
@@ -32,13 +69,15 @@ def escape_postscript_char(ch: str) -> str:
     return ch
 
 
-def render_glyph(tmp_dir: pathlib.Path, ch: str) -> pathlib.Path:
+def render_glyph(
+    tmp_dir: pathlib.Path, ch: str, font_name: str, point_size: int, font_search_paths: list[str]
+) -> pathlib.Path:
     output = tmp_dir / f"{ord(ch):03d}.pgm"
     escaped = escape_postscript_char(ch)
     program = (
         "1 setgray clippath fill "
         "0 setgray "
-        f"/{FONT_NAME} findfont {POINT_SIZE} scalefont setfont "
+        f"/{font_name} findfont {point_size} scalefont setfont "
         f"{ORIGIN_X} {BASELINE_Y} moveto "
         f"({escaped}) show showpage"
     )
@@ -55,9 +94,9 @@ def render_glyph(tmp_dir: pathlib.Path, ch: str) -> pathlib.Path:
         f"-sOutputFile={output}",
     ]
 
-    for font_path in FONT_SEARCH_PATHS:
-        if pathlib.Path(font_path).is_dir():
-            command.append(f"-sFONTPATH={font_path}")
+    existing_paths = [font_path for font_path in font_search_paths if pathlib.Path(font_path).is_dir()]
+    if existing_paths:
+        command.append(f"-sFONTPATH={os.pathsep.join(existing_paths)}")
 
     command += [
         "-c",
@@ -71,6 +110,39 @@ def render_glyph(tmp_dir: pathlib.Path, ch: str) -> pathlib.Path:
         text=True,
     )
     return output
+
+
+def advance_width_for_glyph(ch: str, font_name: str, point_size: int, font_search_paths: list[str]) -> int:
+    escaped = escape_postscript_char(ch)
+    command = [
+        "gs",
+        "-q",
+        "-dNODISPLAY",
+    ]
+
+    existing_paths = [font_path for font_path in font_search_paths if pathlib.Path(font_path).is_dir()]
+    if existing_paths:
+        command.append(f"-sFONTPATH={os.pathsep.join(existing_paths)}")
+
+    command += [
+        "-c",
+        (
+            f"/{font_name} findfont {point_size} scalefont setfont "
+            f"({escaped}) stringwidth pop == quit"
+        ),
+    ]
+
+    result = subprocess.run(
+        command,
+        check=True,
+        capture_output=True,
+        text=True,
+    )
+    lines = [line.strip() for line in result.stdout.splitlines() if line.strip()]
+    if not lines:
+        raise RuntimeError(f"Failed to determine advance width for {ch!r}")
+
+    return max(1, int(math.floor(float(lines[-1]) + 0.5)))
 
 
 def parse_pgm(path: pathlib.Path) -> tuple[int, int, bytes]:
@@ -101,6 +173,8 @@ def alpha_at(raster: bytes, width: int, x: int, y: int) -> int:
 
 
 def main() -> None:
+    args = parse_args()
+    font_search_paths = list(DEFAULT_FONT_SEARCH_PATHS)
     glyph_images: dict[str, tuple[int, int, bytes]] = {}
     global_top = CANVAS_HEIGHT
     global_bottom = -1
@@ -110,7 +184,9 @@ def main() -> None:
 
         for code in range(FIRST_CHAR, LAST_CHAR + 1):
             ch = chr(code)
-            pgm_path = render_glyph(tmp_dir, ch)
+            pgm_path = render_glyph(
+                tmp_dir, ch, args.font_name, args.point_size, font_search_paths
+            )
             width, height, raster = parse_pgm(pgm_path)
             glyph_images[ch] = (width, height, raster)
 
@@ -155,15 +231,17 @@ def main() -> None:
                     if alpha <= ALPHA_THRESHOLD:
                         alpha = 0
                     bitmap_bytes.append(alpha)
-            x_advance = glyph_width + 1
+            x_offset = min_x - ORIGIN_X
+            x_advance = advance_width_for_glyph(ch, args.font_name, args.point_size, font_search_paths)
         else:
+            x_offset = 0
             glyph_width = 0
-            x_advance = SPACE_ADVANCE
+            x_advance = advance_width_for_glyph(ch, args.font_name, args.point_size, font_search_paths)
 
         glyph_entries.append(
             "    "
             + "{"
-            + f"{bitmap_offset}, {glyph_width}, {x_advance}"
+            + f"{bitmap_offset}, {x_offset}, {glyph_width}, {x_advance}"
             + "}, "
             + f"// {repr(ch)}"
         )
@@ -174,19 +252,20 @@ def main() -> None:
         "#include <Arduino.h>",
         "",
         "// Generated from a real serif font at build time and embedded as glyph data.",
-        f"// Source font: {FONT_NAME} at {POINT_SIZE} pt",
+        f"// Source font: {args.font_name} at {args.point_size} pt",
         "",
-        "struct EmbeddedSerifGlyph {",
+        f"struct {args.symbol_prefix}Glyph " + "{",
         "  uint32_t bitmapOffset;",
+        "  int8_t xOffset;",
         "  uint8_t width;",
         "  uint8_t xAdvance;",
         "};",
         "",
-        f"constexpr uint8_t kEmbeddedSerifFirstChar = {FIRST_CHAR};",
-        f"constexpr uint8_t kEmbeddedSerifLastChar = {LAST_CHAR};",
-        f"constexpr uint8_t kEmbeddedSerifHeight = {font_height};",
+        f"constexpr uint8_t k{args.symbol_prefix}FirstChar = {FIRST_CHAR};",
+        f"constexpr uint8_t k{args.symbol_prefix}LastChar = {LAST_CHAR};",
+        f"constexpr uint8_t k{args.symbol_prefix}Height = {font_height};",
         "",
-        "static const uint8_t kEmbeddedSerifBitmaps[] PROGMEM = {",
+        f"static const uint8_t k{args.symbol_prefix}Bitmaps[] PROGMEM = " + "{",
     ]
 
     for offset in range(0, len(bitmap_bytes), 16):
@@ -196,13 +275,13 @@ def main() -> None:
     lines += [
         "};",
         "",
-        "static const EmbeddedSerifGlyph kEmbeddedSerifGlyphs[] PROGMEM = {",
+        f"static const {args.symbol_prefix}Glyph k{args.symbol_prefix}Glyphs[] PROGMEM = " + "{",
         *glyph_entries,
         "};",
         "",
     ]
 
-    OUTPUT_PATH.write_text("\n".join(lines) + "\n", encoding="ascii")
+    args.output.write_text("\n".join(lines) + "\n", encoding="ascii")
 
 
 if __name__ == "__main__":

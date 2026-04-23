@@ -10,12 +10,16 @@ struct ChapterMarker {
 
 struct BookContent {
   String title;
+  String author;
   std::vector<String> words;
   std::vector<ChapterMarker> chapters;
+  std::vector<size_t> paragraphStarts;
 
   void clear() {
     title = "";
+    author = "";
     words.clear();
     chapters.clear();
+    paragraphStarts.clear();
   }
 };

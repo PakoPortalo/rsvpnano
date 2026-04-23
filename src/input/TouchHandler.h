@@ -24,14 +24,16 @@ class TouchHandler {
   void cancel();
 
  private:
-  static constexpr uint8_t kAddress = 0x38;  // FT3168 on the Waveshare 1.91" touch board.
+  static constexpr uint8_t kAddress = 0x3B;  // AXS15231B touch endpoint on the 3.49" board.
   bool initialized_ = false;
   uint32_t lastPollMs_ = 0;
   uint32_t backoffUntilMs_ = 0;
+  uint32_t lastTouchSampleMs_ = 0;
   uint8_t consecutiveReadFailures_ = 0;
+  uint8_t emptyTouchSamples_ = 0;
   bool touchActive_ = false;
   uint16_t lastX_ = 0;
   uint16_t lastY_ = 0;
 
-  bool readRegister(uint8_t reg, uint8_t *buffer, size_t len);
+  bool readTouchPacket(uint8_t *buffer, size_t len);
 };

@@ -1,13 +1,35 @@
 #include "input/TouchHandler.h"
 
+#include <algorithm>
 #include <Wire.h>
 
 #include "board/BoardConfig.h"
 
+namespace {
+
+constexpr uint8_t kReadTouchCommand[] = {
+    0xB5, 0xAB, 0xA5, 0x5A, 0x00, 0x00, 0x00, 0x08, 0x00, 0x00, 0x00,
+};
+constexpr uint32_t kPollIntervalMs = 20;
+constexpr uint32_t kFailureBackoffMs = 250;
+constexpr uint8_t kReleaseConfirmSamples = 2;
+
+uint16_t clampDisplayX(uint16_t x) {
+  return std::min<uint16_t>(x, static_cast<uint16_t>(BoardConfig::DISPLAY_WIDTH - 1));
+}
+
+uint16_t clampDisplayY(uint16_t y) {
+  return std::min<uint16_t>(y, static_cast<uint16_t>(BoardConfig::DISPLAY_HEIGHT - 1));
+}
+
+}  // namespace
+
 bool TouchHandler::begin() {
   lastPollMs_ = 0;
   backoffUntilMs_ = 0;
+  lastTouchSampleMs_ = 0;
   consecutiveReadFailures_ = 0;
+  emptyTouchSamples_ = 0;
   touchActive_ = false;
   lastX_ = 0;
   lastY_ = 0;
@@ -16,14 +38,9 @@ bool TouchHandler::begin() {
   initialized_ = (error == 0);
 
   if (!initialized_) {
-    Serial.println("[touch] Controller not detected at 0x38");
+    Serial.println("[touch] Controller not detected at 0x3B");
   } else {
-    const uint8_t normalMode = 0x00;
-    Wire.beginTransmission(kAddress);
-    Wire.write(0x00);
-    Wire.write(normalMode);
-    Wire.endTransmission();
-    Serial.println("[touch] Initialized (FT3168)");
+    Serial.println("[touch] Initialized (AXS15231B)");
   }
 
   return initialized_;
@@ -39,15 +56,15 @@ void TouchHandler::cancel() {
   touchActive_ = false;
   lastPollMs_ = 0;
   backoffUntilMs_ = 0;
+  lastTouchSampleMs_ = 0;
   consecutiveReadFailures_ = 0;
+  emptyTouchSamples_ = 0;
 }
 
-bool TouchHandler::readRegister(uint8_t reg, uint8_t *buffer, size_t len) {
+bool TouchHandler::readTouchPacket(uint8_t *buffer, size_t len) {
   Wire.beginTransmission(kAddress);
-  Wire.write(reg);
-  // The ESP32 Arduino repeated-start path is what emits the i2cWriteReadNonStop
-  // errors we were seeing in the monitor, so use a plain write-then-read transaction.
-  if (Wire.endTransmission(true) != 0) {
+  Wire.write(kReadTouchCommand, sizeof(kReadTouchCommand));
+  if (Wire.endTransmission(false) != 0) {
     return false;
   }
 
@@ -64,8 +81,6 @@ bool TouchHandler::readRegister(uint8_t reg, uint8_t *buffer, size_t len) {
 }
 
 bool TouchHandler::poll(TouchEvent &event) {
-  static constexpr uint32_t kPollIntervalMs = 40;
-  static constexpr uint32_t kFailureBackoffMs = 250;
   event = TouchEvent{};
 
   if (!initialized_) {
@@ -82,8 +97,8 @@ bool TouchHandler::poll(TouchEvent &event) {
   }
   lastPollMs_ = now;
 
-  uint8_t points = 0;
-  if (!readRegister(0x02, &points, 1)) {
+  uint8_t data[8] = {0};
+  if (!readTouchPacket(data, sizeof(data))) {
     backoffUntilMs_ = now + kFailureBackoffMs;
     if (++consecutiveReadFailures_ >= 5) {
       initialized_ = false;
@@ -93,9 +108,16 @@ bool TouchHandler::poll(TouchEvent &event) {
   }
   consecutiveReadFailures_ = 0;
 
-  if (points == 0) {
+  const uint8_t points = data[1];
+  if (points == 0 || points >= 5) {
     if (touchActive_) {
+      ++emptyTouchSamples_;
+      if (emptyTouchSamples_ < kReleaseConfirmSamples) {
+        return false;
+      }
+
       touchActive_ = false;
+      emptyTouchSamples_ = 0;
       event.touched = false;
       event.x = lastX_;
       event.y = lastY_;
@@ -105,30 +127,25 @@ bool TouchHandler::poll(TouchEvent &event) {
     return false;
   }
 
-  uint8_t data[4] = {0};
-  if (!readRegister(0x03, data, sizeof(data))) {
-    backoffUntilMs_ = now + kFailureBackoffMs;
-    if (++consecutiveReadFailures_ >= 5) {
-      initialized_ = false;
-      Serial.println("[touch] Read failed repeatedly, disabling touch polling");
-    }
-    return false;
-  }
   backoffUntilMs_ = 0;
   consecutiveReadFailures_ = 0;
+  emptyTouchSamples_ = 0;
+  lastTouchSampleMs_ = now;
 
   event.touched = true;
   event.gesture = 0;
   event.phase = touchActive_ ? TouchPhase::Move : TouchPhase::Start;
-  event.y = static_cast<uint16_t>(((data[0] & 0x0F) << 8) | data[1]);
-  event.x = static_cast<uint16_t>(((data[2] & 0x0F) << 8) | data[3]);
-  if (event.x > BoardConfig::DISPLAY_WIDTH) {
-    event.x = BoardConfig::DISPLAY_WIDTH;
+  const uint16_t rawLongAxis = static_cast<uint16_t>(((data[2] & 0x0F) << 8) | data[3]);
+  const uint16_t rawShortAxis = static_cast<uint16_t>(((data[4] & 0x0F) << 8) | data[5]);
+  const uint16_t mappedX = clampDisplayX(rawLongAxis);
+  const uint16_t mappedY = clampDisplayY(rawShortAxis);
+  if (BoardConfig::UI_ROTATED_180) {
+    event.x = static_cast<uint16_t>(BoardConfig::DISPLAY_WIDTH - 1 - mappedX);
+    event.y = static_cast<uint16_t>(BoardConfig::DISPLAY_HEIGHT - 1 - mappedY);
+  } else {
+    event.x = mappedX;
+    event.y = mappedY;
   }
-  if (event.y > BoardConfig::DISPLAY_HEIGHT) {
-    event.y = BoardConfig::DISPLAY_HEIGHT;
-  }
-  event.y = BoardConfig::DISPLAY_HEIGHT - event.y;
   touchActive_ = true;
   lastX_ = event.x;
   lastY_ = event.y;

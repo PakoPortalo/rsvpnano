@@ -151,10 +151,11 @@ def container_rootfile(epub: zipfile.ZipFile) -> str:
     raise ValueError("EPUB container.xml does not name an OPF package file")
 
 
-def parse_package(epub: zipfile.ZipFile, opf_path: str) -> tuple[str, list[str]]:
+def parse_package(epub: zipfile.ZipFile, opf_path: str) -> tuple[str, str, list[str]]:
     package_xml = read_zip_text(epub, opf_path)
     root = ET.fromstring(package_xml)
     title = first_child_text(root, "title")
+    author = first_child_text(root, "creator")
 
     manifest: dict[str, str] = {}
     for node in root.iter():
@@ -177,7 +178,7 @@ def parse_package(epub: zipfile.ZipFile, opf_path: str) -> tuple[str, list[str]]
     if not spine_paths:
         raise ValueError("EPUB spine does not contain readable XHTML/HTML documents")
 
-    return title, spine_paths
+    return title, author, spine_paths
 
 
 def fallback_chapter_title(path: str, index: int) -> str:
@@ -196,14 +197,21 @@ def extract_events(epub: zipfile.ZipFile, path: str) -> list[tuple[str, str]]:
 def write_rsvp(epub_path: pathlib.Path, output_path: pathlib.Path) -> None:
     with zipfile.ZipFile(epub_path) as epub:
         opf_path = container_rootfile(epub)
-        title, spine_paths = parse_package(epub, opf_path)
+        title, author, spine_paths = parse_package(epub, opf_path)
 
         lines: list[str] = [
             f"@rsvp {RSVP_VERSION}",
             f"@title {directive_text(title or epub_path.stem)}",
-            f"@source {directive_text(epub_path.name)}",
-            "",
         ]
+        author = directive_text(author)
+        if author:
+            lines.append(f"@author {author}")
+        lines.extend(
+            [
+                f"@source {directive_text(epub_path.name)}",
+                "",
+            ]
+        )
 
         chapter_count = 0
         for index, spine_path in enumerate(spine_paths, start=1):
