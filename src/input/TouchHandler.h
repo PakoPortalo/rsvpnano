@@ -12,7 +12,6 @@ struct TouchEvent {
   bool touched = false;
   uint16_t x = 0;
   uint16_t y = 0;
-  uint8_t gesture = 0;
   TouchPhase phase = TouchPhase::Move;
 };
 

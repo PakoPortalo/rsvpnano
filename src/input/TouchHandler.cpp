@@ -133,7 +133,6 @@ bool TouchHandler::poll(TouchEvent &event) {
   lastTouchSampleMs_ = now;
 
   event.touched = true;
-  event.gesture = 0;
   event.phase = touchActive_ ? TouchPhase::Move : TouchPhase::Start;
   const uint16_t rawLongAxis = static_cast<uint16_t>(((data[2] & 0x0F) << 8) | data[3]);
   const uint16_t rawShortAxis = static_cast<uint16_t>(((data[4] & 0x0F) << 8) | data[5]);

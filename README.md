@@ -1,123 +1,85 @@
-# RSVP Nano
+# rsvpnano — desktop port
 
-RSVP Nano is an open-source ESP32-S3 reading device for showing text one word at a time with RSVP (Rapid Serial Visual Presentation). The firmware is built around stable anchor-letter rendering, readable typography, tunable pacing, SD card storage, and local EPUB conversion.
+Fork of [ionutdecebal/rsvpnano](https://github.com/ionutdecebal/rsvpnano) focused on porting the RSVP reader to desktop and mobile platforms while keeping the original ESP32-S3 firmware buildable.
 
-## Highlights
+## Status
 
-- One-word RSVP reader with stable anchor alignment.
-- Adjustable typography, anchor guides, pacing, and phantom words.
-- Chapter and paragraph-aware navigation.
-- SD card library under `/books`.
-- Local on-device EPUB conversion to cached `.rsvp` files.
-- USB mass-storage mode for copying books to the SD card.
-- Browser-based firmware installation with no IDE required.
+| Platform | State |
+|----------|-------|
+| macOS (Apple Silicon, M1 / M2) | ✅ Working — SDL2 simulator under `desktop/` |
+| Windows | ⏳ Planned (next) |
+| Linux | ⏳ Planned |
+| Android | 🎯 Roadmap |
+| iOS | 🎯 Roadmap |
+| ESP32-S3 device (original) | ✅ Still builds with `pio run` |
 
-## Getting Started
+The macOS build runs the same `src/` code as the device. Hardware (display, buttons, touch, SD, USB) is replaced by a thin shim layer (`desktop/shim/`, `desktop/platform/`) that bridges to SDL2 and POSIX.
 
-### Flash From The Browser
+## Quick start (macOS Apple Silicon)
 
-The easiest way to install the firmware is the web flasher:
-
-<https://ionutdecebal.github.io/rsvpnano/>
-
-Use Chrome or Edge on desktop, connect the device over USB, and follow the installer prompts.
-
-The browser flasher uses ESP Web Tools and Web Serial, so it must be opened over HTTPS or localhost.
-
-### Add Books
-
-Create a `books` folder at the root of the SD card:
-
-```text
-/books
-  my-book.epub
-  another-book.rsvp
+```bash
+brew install sdl2
+cd desktop
+make
+./build/rsvpnano
 ```
 
-The firmware prioritizes `.rsvp` files. If a matching `.rsvp` file does not exist yet, an EPUB appears in the library and is converted locally the first time it is opened. The converted `.rsvp` file is then reused on future launches.
+The window opens at 1280×344 (logical 640×172 ×2). Drop `.txt` or `.rsvp` books in `desktop/books/` and they appear in the library on next launch. EPUB conversion is disabled in the desktop build for now — convert on the device or with another tool first.
 
-If a conversion is interrupted, you may see sidecar files such as:
+Click inside the window once on launch so it captures keyboard focus.
 
-```text
-.rsvp.tmp
-.rsvp.converting
-.rsvp.failed
+## Keyboard controls (desktop)
+
+| Key | Reader (Paused / Playing) | Menu |
+|-----|---------------------------|------|
+| **Space** | Play / Pause | Select item |
+| **Enter** / **M** | Open menu | Close menu |
+| **Esc** | Pause if playing | Back to parent menu |
+| **← / →** | Hold to scrub at the current WPM | Back / Enter |
+| **Shift+← / Shift+→** | Jump ±10 words | — |
+| **↑ / ↓** | WPM ±1 | Navigate up / down |
+| **Shift+↑ / Shift+↓** | WPM ±10 | — |
+| **T** | Cycle theme (light / dark / night) | — |
+| **Q** | Quit | Quit |
+| Mouse left click | Tap (wakes the splash) | Tap = select |
+
+Holding ← / → advances words at the current reading speed — natural for seeking inside a paragraph without spamming the key.
+
+## Build the device firmware
+
+The original ESP32-S3 firmware still builds:
+
+```bash
+pio run -e waveshare_esp32s3_usb_msc
+pio run -t upload -e waveshare_esp32s3_usb_msc
 ```
 
-## Build From Source
+Hardware target is the Waveshare ESP32-S3-Touch-LCD-3.49 (640×172 landscape). See the upstream repo for the full hardware story, web flasher, and the on-device EPUB conversion pipeline: <https://github.com/ionutdecebal/rsvpnano>.
 
-Install PlatformIO Core, then run:
+## Repo layout
 
-```sh
-pio run
-pio run -t upload
-pio device monitor
+```
+src/                     Cross-platform reader code (unchanged on device)
+desktop/
+  Makefile               clang++ build for macOS
+  main_desktop.cpp       SDL entry point, drives setup() / loop()
+  platform/              Hardware replacements (display → SDL2, input → keyboard, ...)
+  shim/                  ESP-IDF / Arduino API stubs for desktop
+  books/                 Drop .txt or .rsvp books here
 ```
 
-The default environment is `waveshare_esp32s3_usb_msc`, which includes the reader and USB transfer mode.
+`#if DESKTOP_BUILD` guards the few desktop-only hooks added inside `src/app/App.{h,cpp}` (the keyboard-driven action dispatcher). Device builds are unaffected.
 
-Serial monitor runs at `115200`.
+## Roadmap
 
-To export the merged binary used by the browser flasher:
+1. **macOS** — currently working. Known issue: the bitmap font is fixed-resolution, so any window scaling either pixelates (nearest filter) or blurs (linear). The proper fix is vector text on desktop via SDL_ttf.
+2. **Windows** — replace the Makefile with CMake or MSVC, verify SDL2 specifics, drop the macOS-only NSApplication activation in `axs15231b_desktop.cpp`.
+3. **Linux** — should follow Windows for free given SDL2's portability; mostly packaging.
+4. **Android** — wrap the SDL2 layer with SDL2's Android template, swap SD-card storage for the platform's storage API, ship as an APK.
+5. **iOS** — same story with SDL2's iOS template; rework storage and entry point; package as an `.ipa`.
 
-```sh
-python3 tools/export_web_firmware.py
-```
-
-That command writes:
-
-```text
-web/firmware/rsvp-nano.bin
-```
-
-## Hardware
-
-The current firmware configuration targets the [Waveshare ESP32-S3-Touch-LCD-3.49](https://www.waveshare.com/esp32-s3-touch-lcd-3.49.htm?&aff_id=153227). This is an affiliate link, so if you click it to find the hardware and buy the board, it helps support the project:
-
-- ESP32-S3 with 16 MB flash and OPI PSRAM.
-- AXS15231B-based 172 x 640 LCD panel used in landscape as 640 x 172.
-- SD card connected through `SD_MMC`.
-- Touch, battery, and board power control pins defined in `src/board/BoardConfig.h`.
-
-If you are adapting the project to different hardware, start with `src/board/BoardConfig.h`, then review the display, touch, power, and SD wiring code.
-
-## Desktop Book Conversion
-
-If you prefer to pre-convert books on a computer, copy the helper files from `tools/sd_card_converter` to the SD card root and run the launcher for your platform:
-
-- Windows: `Convert books.bat`
-- macOS: `Convert books.command`
-- Linux: `convert_books_linux.sh` or `python3 convert_books.py`
-
-The desktop converter scans `/books` and creates `.rsvp` files beside supported sources.
-The Linux path has been used during development. The macOS and Windows launchers are included, but they have not been tested yet.
-
-Supported input formats:
-
-- `.epub`
-- `.txt`
-- `.md` / `.markdown`
-- `.html` / `.htm` / `.xhtml`
-
-## RSVP File Format
-
-`.rsvp` files are plain text. The reader understands a small set of directives:
-
-```text
-@rsvp 1
-@title The Book Title
-@author Author Name
-@source /books/source.epub
-@chapter Chapter 1
-@para
-```
-
-Normal text lines after the directives are split into words by the firmware.
-
-## Contributing
-
-Issues, experiments, forks, and pull requests are welcome. If you change hardware mappings, build environments, or the flashing flow, please update the relevant docs alongside the code.
+End goal: a single codebase where `src/` stays the reader logic and each platform contributes its own thin shim layer.
 
 ## License
 
-MIT. See [LICENSE](LICENSE).
+Inherits the upstream repo's license. See `LICENSE` at the upstream repository.

@@ -342,6 +342,20 @@ void App::update(uint32_t nowMs) {
   updateWpmFeedback(nowMs);
   maybeSaveReadingPosition(nowMs);
 
+#if DESKTOP_BUILD
+  if (desktopScrubDir_ != 0 &&
+      (state_ == AppState::Paused || state_ == AppState::Playing)) {
+    const uint32_t interval = std::max<uint32_t>(reader_.wordIntervalMs(), 30);
+    if (nowMs - desktopScrubLastMs_ >= interval) {
+      reader_.seekRelative(reader_.currentIndex(), desktopScrubDir_);
+      desktopScrubLastMs_ = nowMs;
+      contextViewVisible_ = false;
+      wpmFeedbackVisible_ = false;
+      renderReaderWord();
+    }
+  }
+#endif
+
   if (batteryChanged && (state_ == AppState::Paused || state_ == AppState::Playing)) {
     if (contextViewVisible_) {
       renderContextPreview();
@@ -771,8 +785,8 @@ void App::handleTouch(uint32_t nowMs) {
     return;
   }
 
-  Serial.printf("[touch] phase=%s touched=%u x=%u y=%u gesture=%u state=%s\n",
-                touchPhaseName(ev.phase), ev.touched ? 1 : 0, ev.x, ev.y, ev.gesture,
+  Serial.printf("[touch] phase=%s touched=%u x=%u y=%u state=%s\n",
+                touchPhaseName(ev.phase), ev.touched ? 1 : 0, ev.x, ev.y,
                 stateName(state_));
   if (state_ == AppState::Menu) {
     applyMenuTouchGesture(ev, nowMs);
@@ -1750,21 +1764,10 @@ bool App::loadBookAtIndex(size_t index, uint32_t nowMs, bool allowLegacyPosition
   return true;
 }
 
-String App::bookPositionKey(const String &bookPath) const {
+String App::bookPrefKey(char prefix, const String &bookPath) const {
   char key[10];
-  std::snprintf(key, sizeof(key), "p%08lx", static_cast<unsigned long>(hashBookPath(bookPath)));
-  return String(key);
-}
-
-String App::bookWordCountKey(const String &bookPath) const {
-  char key[10];
-  std::snprintf(key, sizeof(key), "c%08lx", static_cast<unsigned long>(hashBookPath(bookPath)));
-  return String(key);
-}
-
-String App::bookRecentKey(const String &bookPath) const {
-  char key[10];
-  std::snprintf(key, sizeof(key), "r%08lx", static_cast<unsigned long>(hashBookPath(bookPath)));
+  std::snprintf(key, sizeof(key), "%c%08lx", prefix,
+                static_cast<unsigned long>(hashBookPath(bookPath)));
   return String(key);
 }
 
@@ -2192,3 +2195,107 @@ void App::handleStorageStatus(void *context, const char *title, const char *line
   static_cast<App *>(context)->renderStorageStatus(title, line1, line2, progressPercent);
   delay(0);
 }
+
+#if DESKTOP_BUILD
+void App::desktopAction(DesktopAction action) {
+  const uint32_t nowMs = millis();
+
+  auto adjustWpm = [&](int delta) {
+    reader_.adjustWpm(delta);
+    preferences_.putUShort(kPrefWpm, reader_.wpm());
+    Serial.printf("[app] WPM=%u interval=%lu ms\n", reader_.wpm(),
+                  static_cast<unsigned long>(reader_.wordIntervalMs()));
+    if (state_ == AppState::Paused || state_ == AppState::Playing) {
+      renderWpmFeedback(nowMs);
+    }
+  };
+
+  auto scrub = [&](int steps) {
+    if (state_ != AppState::Paused && state_ != AppState::Playing) {
+      return;
+    }
+    reader_.seekRelative(reader_.currentIndex(), steps);
+    saveReadingPosition(true);
+    contextViewVisible_ = false;
+    wpmFeedbackVisible_ = false;
+    renderReaderWord();
+    Serial.printf("[app] scrub %+d -> word=%s\n", steps, reader_.currentWord().c_str());
+  };
+
+  switch (action) {
+    case DesktopAction::Up:
+      if (state_ == AppState::Menu) {
+        moveMenuSelection(-1);
+      } else {
+        adjustWpm(1);
+      }
+      break;
+    case DesktopAction::Down:
+      if (state_ == AppState::Menu) {
+        moveMenuSelection(1);
+      } else {
+        adjustWpm(-1);
+      }
+      break;
+    case DesktopAction::UpFast:
+      if (state_ == AppState::Menu) {
+        for (int i = 0; i < 10; ++i) moveMenuSelection(-1);
+      } else {
+        adjustWpm(10);
+      }
+      break;
+    case DesktopAction::DownFast:
+      if (state_ == AppState::Menu) {
+        for (int i = 0; i < 10; ++i) moveMenuSelection(1);
+      } else {
+        adjustWpm(-10);
+      }
+      break;
+    case DesktopAction::LeftPress:
+      if (state_ == AppState::Menu) {
+        toggleMenuFromPowerButton(nowMs);
+      } else {
+        scrub(-1);
+        desktopScrubDir_ = -1;
+        desktopScrubLastMs_ = nowMs;
+      }
+      break;
+    case DesktopAction::LeftRelease:
+      desktopScrubDir_ = 0;
+      break;
+    case DesktopAction::RightPress:
+      if (state_ == AppState::Menu) {
+        selectMenuItem(nowMs);
+      } else {
+        scrub(1);
+        desktopScrubDir_ = 1;
+        desktopScrubLastMs_ = nowMs;
+      }
+      break;
+    case DesktopAction::RightRelease:
+      desktopScrubDir_ = 0;
+      break;
+    case DesktopAction::LeftFast:
+      scrub(-10);
+      break;
+    case DesktopAction::RightFast:
+      scrub(10);
+      break;
+    case DesktopAction::Select:
+      if (state_ == AppState::Menu) {
+        selectMenuItem(nowMs);
+      }
+      break;
+    case DesktopAction::Back:
+      if (state_ == AppState::Menu) {
+        toggleMenuFromPowerButton(nowMs);
+      } else if (state_ == AppState::Playing) {
+        setState(AppState::Paused, nowMs);
+      }
+      break;
+    case DesktopAction::ThemeCycle:
+      cycleThemeMode(nowMs);
+      break;
+  }
+}
+#endif

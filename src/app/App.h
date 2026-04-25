@@ -19,6 +19,25 @@ class App {
   void begin();
   void update(uint32_t nowMs);
 
+#if DESKTOP_BUILD
+  enum class DesktopAction {
+    Up,
+    Down,
+    UpFast,
+    DownFast,
+    LeftPress,
+    LeftRelease,
+    RightPress,
+    RightRelease,
+    LeftFast,
+    RightFast,
+    Select,
+    Back,
+    ThemeCycle,
+  };
+  void desktopAction(DesktopAction action);
+#endif
+
  private:
   struct PausedTouchSession {
     bool active = false;
@@ -102,9 +121,10 @@ class App {
   bool restoreSavedBook(uint32_t nowMs);
   void saveReadingPosition(bool force = false);
   bool loadBookAtIndex(size_t index, uint32_t nowMs, bool allowLegacyPositionFallback = false);
-  String bookPositionKey(const String &bookPath) const;
-  String bookWordCountKey(const String &bookPath) const;
-  String bookRecentKey(const String &bookPath) const;
+  String bookPrefKey(char prefix, const String &bookPath) const;
+  String bookPositionKey(const String &bookPath) const { return bookPrefKey('p', bookPath); }
+  String bookWordCountKey(const String &bookPath) const { return bookPrefKey('c', bookPath); }
+  String bookRecentKey(const String &bookPath) const { return bookPrefKey('r', bookPath); }
   uint32_t nextRecentSequence();
   uint32_t bookRecentSequence(const String &bookPath);
   void markBookRecent(const String &bookPath);
@@ -199,4 +219,8 @@ class App {
   bool darkMode_ = true;
   bool nightMode_ = false;
   DisplayManager::TypographyConfig typographyConfig_;
+#if DESKTOP_BUILD
+  int desktopScrubDir_ = 0;
+  uint32_t desktopScrubLastMs_ = 0;
+#endif
 };

@@ -13,3 +13,9 @@ tools/*.rsvp
 *.rsvp.failed
 *.rsvp.converting
 web/firmware/*.bin
+
+# Local-only Claude rules
+CLAUDE.md
+
+# Desktop simulator build artefacts
+desktop/build/

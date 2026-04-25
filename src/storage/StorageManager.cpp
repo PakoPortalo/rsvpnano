@@ -1030,6 +1030,7 @@ bool StorageManager::begin() {
   mounted_ = false;
   listedOnce_ = false;
   bookPaths_.clear();
+  bookMeta_.clear();
 
   if (!SD_MMC.setPins(BoardConfig::PIN_SD_CLK, BoardConfig::PIN_SD_CMD, BoardConfig::PIN_SD_D0)) {
     Serial.println("[storage] SD_MMC pin setup failed");
@@ -1061,6 +1062,7 @@ void StorageManager::end() {
   mounted_ = false;
   listedOnce_ = false;
   bookPaths_.clear();
+  bookMeta_.clear();
 }
 
 void StorageManager::listBooks() {
@@ -1119,6 +1121,10 @@ String StorageManager::bookDisplayName(size_t index) const {
     return "";
   }
 
+  if (index < bookMeta_.size() && !bookMeta_[index].title.isEmpty()) {
+    return bookMeta_[index].title;
+  }
+
   const String title = readRsvpDirectiveValue(path, "@title");
   if (!title.isEmpty()) {
     return title;
@@ -1131,6 +1137,10 @@ String StorageManager::bookAuthorName(size_t index) const {
   const String path = bookPath(index);
   if (path.isEmpty()) {
     return "";
+  }
+
+  if (index < bookMeta_.size() && !bookMeta_[index].author.isEmpty()) {
+    return bookMeta_[index].author;
   }
 
   if (hasEpubExtension(path)) {
@@ -1301,11 +1311,24 @@ bool StorageManager::loadBookWords(size_t index, std::vector<String> &words, Str
 void StorageManager::refreshBookPaths() {
   if (!mounted_) {
     bookPaths_.clear();
+    bookMeta_.clear();
     return;
   }
 
   notifyStatus("SD", "Reading library", "", 96);
   bookPaths_ = collectBookPaths();
+
+  bookMeta_.clear();
+  bookMeta_.resize(bookPaths_.size());
+  for (size_t i = 0; i < bookPaths_.size(); ++i) {
+    const String &path = bookPaths_[i];
+    if (hasRsvpExtension(path)) {
+      bookMeta_[i].title = readRsvpDirectiveValue(path, "@title");
+      bookMeta_[i].author = readRsvpDirectiveValue(path, "@author");
+    } else if (hasEpubExtension(path)) {
+      bookMeta_[i].author = epubLibraryLabel(path);
+    }
+  }
 
   size_t rsvpCount = 0;
   size_t textCount = 0;

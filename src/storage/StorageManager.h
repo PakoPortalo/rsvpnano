@@ -33,9 +33,15 @@ class StorageManager {
   void notifyStatus(const char *title, const char *line1 = "", const char *line2 = "",
                     int progressPercent = -1);
 
+  struct BookMeta {
+    String title;
+    String author;
+  };
+
   bool mounted_ = false;
   bool listedOnce_ = false;
   StatusCallback statusCallback_ = nullptr;
   void *statusContext_ = nullptr;
   std::vector<String> bookPaths_;
+  std::vector<BookMeta> bookMeta_;
 };
