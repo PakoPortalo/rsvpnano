@@ -7,7 +7,7 @@ CXXFLAGS = -std=c++17 -O0 -g \
 
 # SDL2 flags
 SDL_CFLAGS := $(shell sdl2-config --cflags)
-SDL_LIBS   := -lSDL2main $(shell sdl2-config --libs) -framework AppKit -framework Foundation
+SDL_LIBS   := -lSDL2main $(shell sdl2-config --libs) -lSDL2_ttf -framework AppKit -framework Foundation
 
 DESKTOP_DIR := $(dir $(abspath $(lastword $(MAKEFILE_LIST))))
 SHIM_DIR    := $(DESKTOP_DIR)shim

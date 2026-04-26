@@ -354,6 +354,22 @@ void App::update(uint32_t nowMs) {
       renderReaderWord();
     }
   }
+  // Auto-repeat for ↑/↓ WPM: after 500 ms hold, tick every 80 ms.
+  if (desktopWpmDir_ != 0 &&
+      (state_ == AppState::Paused || state_ == AppState::Playing)) {
+    constexpr uint32_t kWpmHoldDelayMs    = 500;
+    constexpr uint32_t kWpmRepeatPeriodMs = 80;
+    const uint32_t held = nowMs - desktopWpmHoldStartMs_;
+    if (held >= kWpmHoldDelayMs &&
+        nowMs - desktopWpmLastRepeatMs_ >= kWpmRepeatPeriodMs) {
+      const int delta = desktopWpmDir_ * desktopWpmStep_;
+      reader_.setWpm(static_cast<uint16_t>(
+          std::max(1, static_cast<int>(reader_.wpm()) + delta)));
+      preferences_.putUShort(kPrefWpm, reader_.wpm());
+      renderWpmFeedback(nowMs);
+      desktopWpmLastRepeatMs_ = nowMs;
+    }
+  }
 #endif
 
   if (batteryChanged && (state_ == AppState::Paused || state_ == AppState::Playing)) {
@@ -2197,11 +2213,15 @@ void App::handleStorageStatus(void *context, const char *title, const char *line
 }
 
 #if DESKTOP_BUILD
-void App::desktopAction(DesktopAction action) {
+void App::desktopAction(DesktopAction action, int magnitude) {
   const uint32_t nowMs = millis();
 
-  auto adjustWpm = [&](int delta) {
-    reader_.adjustWpm(delta);
+  // Step the WPM by an exact integer delta (overrides reader_.adjustWpm's
+  // hard-coded step of 25, which is fine on device but not for desktop fine
+  // tuning).
+  auto stepWpm = [&](int delta) {
+    const int next = std::max(1, static_cast<int>(reader_.wpm()) + delta);
+    reader_.setWpm(static_cast<uint16_t>(next));
     preferences_.putUShort(kPrefWpm, reader_.wpm());
     Serial.printf("[app] WPM=%u interval=%lu ms\n", reader_.wpm(),
                   static_cast<unsigned long>(reader_.wordIntervalMs()));
@@ -2222,34 +2242,35 @@ void App::desktopAction(DesktopAction action) {
     Serial.printf("[app] scrub %+d -> word=%s\n", steps, reader_.currentWord().c_str());
   };
 
+  auto startWpmHold = [&](int dir, int step) {
+    desktopWpmDir_  = dir;
+    desktopWpmStep_ = std::max(1, step);
+    desktopWpmHoldStartMs_  = nowMs;
+    desktopWpmLastRepeatMs_ = nowMs;
+  };
+
   switch (action) {
-    case DesktopAction::Up:
+    case DesktopAction::UpPress:
       if (state_ == AppState::Menu) {
-        moveMenuSelection(-1);
+        for (int i = 0; i < magnitude; ++i) moveMenuSelection(-1);
       } else {
-        adjustWpm(1);
+        stepWpm(magnitude);
+        startWpmHold(1, magnitude);
       }
       break;
-    case DesktopAction::Down:
+    case DesktopAction::UpRelease:
+      desktopWpmDir_ = 0;
+      break;
+    case DesktopAction::DownPress:
       if (state_ == AppState::Menu) {
-        moveMenuSelection(1);
+        for (int i = 0; i < magnitude; ++i) moveMenuSelection(1);
       } else {
-        adjustWpm(-1);
+        stepWpm(-magnitude);
+        startWpmHold(-1, magnitude);
       }
       break;
-    case DesktopAction::UpFast:
-      if (state_ == AppState::Menu) {
-        for (int i = 0; i < 10; ++i) moveMenuSelection(-1);
-      } else {
-        adjustWpm(10);
-      }
-      break;
-    case DesktopAction::DownFast:
-      if (state_ == AppState::Menu) {
-        for (int i = 0; i < 10; ++i) moveMenuSelection(1);
-      } else {
-        adjustWpm(-10);
-      }
+    case DesktopAction::DownRelease:
+      desktopWpmDir_ = 0;
       break;
     case DesktopAction::LeftPress:
       if (state_ == AppState::Menu) {

@@ -12,6 +12,17 @@
 #include "display/EmbeddedSerifFont70.h"
 #include "display/axs15231b.h"
 
+#if DESKTOP_BUILD
+extern "C" void desktopQueueWord(const char* text, int x, int y, int pixelHeight,
+                                 int focusIndex, uint32_t baseRgb, uint32_t focusRgb);
+static uint32_t rgb565To888(uint16_t c) {
+  uint8_t r = static_cast<uint8_t>(((c >> 11) & 0x1F) * 255 / 31);
+  uint8_t g = static_cast<uint8_t>(((c >>  5) & 0x3F) * 255 / 63);
+  uint8_t b = static_cast<uint8_t>(((c      ) & 0x1F) * 255 / 31);
+  return (static_cast<uint32_t>(r) << 16) | (static_cast<uint32_t>(g) << 8) | b;
+}
+#endif
+
 namespace {
 constexpr int kDisplayWidth = BoardConfig::DISPLAY_WIDTH;
 constexpr int kDisplayHeight = BoardConfig::DISPLAY_HEIGHT;
@@ -1266,6 +1277,14 @@ void DisplayManager::drawRsvpWordScaledAt(const String &word, int x, int y, int 
 }
 
 void DisplayManager::drawRsvp70WordAt(const String &word, int x, int y, int focusIndex) {
+#if DESKTOP_BUILD
+  const TextLayoutMetrics layout = serif70WordLayout(word, focusIndex);
+  const int anchorX = (focusIndex >= 0) ? (x + layout.focusCenterX)
+                                         : (x + (layout.maxX - layout.minX) / 2);
+  desktopQueueWord(word.c_str(), anchorX, y, 70, focusIndex,
+                   rgb565To888(wordColor()), rgb565To888(focusColor()));
+  return;  // skip bitmap glyphs; TTF overlay renders the word
+#endif
   int cursorX = x;
   for (size_t i = 0; i < word.length(); ++i) {
     const EmbeddedSerif70Glyph &glyph = glyph70For(word[i]);
@@ -1284,6 +1303,15 @@ void DisplayManager::drawRsvp70WordAt(const String &word, int x, int y, int focu
 
 void DisplayManager::drawRsvpWordScaledPercentAt(const String &word, int x, int y, int focusIndex,
                                                  uint8_t scalePercent) {
+#if DESKTOP_BUILD
+  const TextLayoutMetrics layout = serifWordLayoutScaledPercent(word, focusIndex, scalePercent);
+  const int anchorX = (focusIndex >= 0) ? (x + layout.focusCenterX)
+                                         : (x + (layout.maxX - layout.minX) / 2);
+  const int approxHeight = (36 * scalePercent) / 100;
+  desktopQueueWord(word.c_str(), anchorX, y, approxHeight, focusIndex,
+                   rgb565To888(wordColor()), rgb565To888(focusColor()));
+  return;
+#endif
   int cursorX = x;
   for (size_t i = 0; i < word.length(); ++i) {
     const EmbeddedSerifGlyph &glyph = glyphFor(word[i]);

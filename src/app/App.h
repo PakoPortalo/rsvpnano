@@ -21,10 +21,10 @@ class App {
 
 #if DESKTOP_BUILD
   enum class DesktopAction {
-    Up,
-    Down,
-    UpFast,
-    DownFast,
+    UpPress,
+    UpRelease,
+    DownPress,
+    DownRelease,
     LeftPress,
     LeftRelease,
     RightPress,
@@ -35,7 +35,8 @@ class App {
     Back,
     ThemeCycle,
   };
-  void desktopAction(DesktopAction action);
+  // magnitude = WPM step per tick for Up/DownPress (1 normal, 10 with shift).
+  void desktopAction(DesktopAction action, int magnitude = 1);
 #endif
 
  private:
@@ -222,5 +223,9 @@ class App {
 #if DESKTOP_BUILD
   int desktopScrubDir_ = 0;
   uint32_t desktopScrubLastMs_ = 0;
+  int desktopWpmDir_ = 0;        // sign of repeat (-1, 0, +1)
+  int desktopWpmStep_ = 1;       // magnitude per tick (1 or 10)
+  uint32_t desktopWpmHoldStartMs_ = 0;
+  uint32_t desktopWpmLastRepeatMs_ = 0;
 #endif
 };

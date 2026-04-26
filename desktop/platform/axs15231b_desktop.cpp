@@ -4,10 +4,13 @@
 #include "app/App.h"
 
 #include <SDL.h>
+#include <SDL_ttf.h>
 #include <cstdint>
 #include <cstdio>
 #include <cstdlib>
 #include <cstring>
+#include <string>
+#include <vector>
 
 extern App app;
 
@@ -38,7 +41,195 @@ static SDL_Renderer* gRenderer = nullptr;
 static SDL_Texture*  gTexture  = nullptr;
 static uint32_t      gPixels[kLogW * kLogH] = {};
 
+// ---- Vector text overlay ----
+// DisplayManager pushes word draw requests here so we can re-render the central
+// word with a real TTF on top of the bitmap layer (which would otherwise look
+// pixelated when scaled).
+struct OverlayWord {
+    std::string text;
+    int   x;          // logical x at which the bitmap left edge sits
+    int   y;          // logical y of bitmap top edge
+    int   pixelHeight;// approx glyph height in logical pixels (for ptsize)
+    int   focusIndex; // index of the focus letter (red), -1 if none
+    uint32_t baseColor;
+    uint32_t focusColor;
+};
+static std::vector<OverlayWord> gOverlayQueue;
+static TTF_Font* gTtfFontBig    = nullptr;  // sized for 70-px glyphs
+static TTF_Font* gTtfFontMedium = nullptr;  // sized for ~36-px glyphs
+static int       gTtfFontBigSize    = 0;
+static int       gTtfFontMediumSize = 0;
+static bool      gTtfReady      = false;
+
+// ────────────────────────────────────────────────────────────────────────────
+// TTF overlay tuning knobs — edit these to nudge the central word's look.
+// All values are in *logical* pixels (640×172 space); they get multiplied by
+// kScale automatically when rendered. Positive offsets push down / right.
+// ────────────────────────────────────────────────────────────────────────────
+
+// How tall the capital letters (e.g. "X") of the BIG central word should be.
+// Increase → larger word. Bitmap font visual cap was ≈ 50.
+static constexpr int kTtfBigCapsHeight    = 75;
+
+// Same for the medium-size word (used when the smaller serif is active).
+static constexpr int kTtfMediumCapsHeight = 28;
+
+// Extra vertical nudge (in logical px). Positive = move text DOWN.
+static constexpr int kTtfYOffset = 17;
+
+// Extra horizontal nudge (in logical px). Positive = move text RIGHT.
+// (Affects the focus letter's horizontal anchoring; usually leave at 0.)
+static constexpr int kTtfXOffset = 0;
+
 DesktopTouchEvent gPendingTouch;
+
+static const char* findSerifFontPath() {
+    if (const char* env = std::getenv("RSVP_FONT_PATH")) {
+        return env;
+    }
+    static const char* candidates[] = {
+        "/System/Library/Fonts/Supplemental/Georgia.ttf",
+        "/System/Library/Fonts/NewYork.ttf",
+        "/System/Library/Fonts/Supplemental/Times New Roman.ttf",
+        "/Library/Fonts/Georgia.ttf",
+        "/usr/share/fonts/truetype/dejavu/DejaVuSerif.ttf",
+        nullptr,
+    };
+    for (int i = 0; candidates[i]; ++i) {
+        FILE* f = std::fopen(candidates[i], "rb");
+        if (f) { std::fclose(f); return candidates[i]; }
+    }
+    return nullptr;
+}
+
+// Open font sized so that the cap-height of 'X' is approximately targetPxCaps.
+static TTF_Font* openFontForCapsHeight(const char* path, int targetPxCaps) {
+    int pt = targetPxCaps;
+    TTF_Font* f = TTF_OpenFont(path, pt);
+    if (!f) return nullptr;
+    int minY = 0, maxY = 0;
+    TTF_GlyphMetrics(f, 'X', nullptr, nullptr, &minY, &maxY, nullptr);
+    int caps = maxY - minY;
+    if (caps > 0 && caps != targetPxCaps) {
+        const int newPt = std::max(8, pt * targetPxCaps / caps);
+        TTF_CloseFont(f);
+        f = TTF_OpenFont(path, newPt);
+    }
+    return f;
+}
+
+static void initTtf() {
+    if (TTF_Init() != 0) {
+        fprintf(stderr, "[ttf] TTF_Init failed: %s\n", TTF_GetError());
+        return;
+    }
+    const char* path = findSerifFontPath();
+    if (!path) {
+        fprintf(stderr, "[ttf] No serif font found. Set RSVP_FONT_PATH to a .ttf path.\n");
+        return;
+    }
+    // SIZE knob — see kTtfBigCapsHeight / kTtfMediumCapsHeight at top of file.
+    gTtfFontBig = openFontForCapsHeight(path, kTtfBigCapsHeight * kScale);
+    gTtfFontMedium = openFontForCapsHeight(path, kTtfMediumCapsHeight * kScale);
+    if (!gTtfFontBig || !gTtfFontMedium) {
+        fprintf(stderr, "[ttf] TTF_OpenFont failed for %s: %s\n", path, TTF_GetError());
+        if (gTtfFontBig) { TTF_CloseFont(gTtfFontBig); gTtfFontBig = nullptr; }
+        if (gTtfFontMedium) { TTF_CloseFont(gTtfFontMedium); gTtfFontMedium = nullptr; }
+        return;
+    }
+    gTtfFontBigSize    = kTtfBigCapsHeight * kScale;
+    gTtfFontMediumSize = kTtfMediumCapsHeight * kScale;
+    gTtfReady = true;
+    printf("[ttf] using %s (big-cap=%dpx, medium-cap=%dpx)\n", path,
+           gTtfFontBigSize, gTtfFontMediumSize);
+}
+
+static void renderTtfStringSegment(TTF_Font* font, const char* text, int dstX, int dstY,
+                                   uint32_t argb, int* outWidth) {
+    if (!*text) { if (outWidth) *outWidth = 0; return; }
+    SDL_Color col = { static_cast<uint8_t>((argb >> 16) & 0xFF),
+                      static_cast<uint8_t>((argb >>  8) & 0xFF),
+                      static_cast<uint8_t>((argb)       & 0xFF), 0xFF };
+    SDL_Surface* surf = TTF_RenderUTF8_Blended(font, text, col);
+    if (!surf) { if (outWidth) *outWidth = 0; return; }
+    SDL_Texture* tex = SDL_CreateTextureFromSurface(gRenderer, surf);
+    if (tex) {
+        SDL_Rect dst = { dstX, dstY, surf->w, surf->h };
+        SDL_RenderCopy(gRenderer, tex, nullptr, &dst);
+        SDL_DestroyTexture(tex);
+    }
+    if (outWidth) *outWidth = surf->w;
+    SDL_FreeSurface(surf);
+}
+
+static int charAdvance(TTF_Font* font, char c) {
+    int adv = 0;
+    TTF_GlyphMetrics(font, static_cast<Uint16>(static_cast<unsigned char>(c)), nullptr, nullptr,
+                     nullptr, nullptr, &adv);
+    return adv;
+}
+
+static void renderOverlayQueue() {
+    if (!gTtfReady || gOverlayQueue.empty()) {
+        gOverlayQueue.clear();
+        return;
+    }
+    for (const OverlayWord& w : gOverlayQueue) {
+        TTF_Font* font = (w.pixelHeight > 50) ? gTtfFontBig : gTtfFontMedium;
+        if (!font) continue;
+
+        // w.x carries the anchor (focus letter centre, in logical px).
+        // POSITION knobs: kTtfXOffset / kTtfYOffset shift the rendered word.
+        const int anchorWinX = (w.x + kTtfXOffset) * kScale;
+        // Bitmap glyph cell top → logical y; map to window and compensate for
+        // TTF baseline so caps top sits at the bitmap glyph cell top.
+        const int capsHeight = (w.pixelHeight > 50) ? gTtfFontBigSize : gTtfFontMediumSize;
+        const int ascent = TTF_FontAscent(font);
+        const int glyphCellTop = (w.y + kTtfYOffset) * kScale;
+        // Surface y where caps top lands at glyphCellTop:
+        const int surfaceY = glyphCellTop - (ascent - capsHeight);
+
+        // Compute starting x so that focus letter centre lands at anchorWinX.
+        int startX = anchorWinX;
+        if (w.focusIndex >= 0 && w.focusIndex < static_cast<int>(w.text.size())) {
+            int prefixW = 0;
+            for (int i = 0; i < w.focusIndex; ++i) {
+                prefixW += charAdvance(font, w.text[i]);
+            }
+            const int focusW = charAdvance(font, w.text[w.focusIndex]);
+            startX = anchorWinX - prefixW - focusW / 2;
+        } else {
+            int totalW = 0;
+            TTF_SizeUTF8(font, w.text.c_str(), &totalW, nullptr);
+            startX = anchorWinX - totalW / 2;
+        }
+
+        int cursorX = startX;
+        for (size_t i = 0; i < w.text.size(); ++i) {
+            char buf[2] = { w.text[i], 0 };
+            const uint32_t col = (static_cast<int>(i) == w.focusIndex) ? w.focusColor : w.baseColor;
+            int charW = 0;
+            renderTtfStringSegment(font, buf, cursorX, surfaceY, col, &charW);
+            cursorX += charAdvance(font, w.text[i]);
+            (void)charW;
+        }
+    }
+    gOverlayQueue.clear();
+}
+
+extern "C" void desktopQueueWord(const char* text, int x, int y, int pixelHeight, int focusIndex,
+                                 uint32_t baseRgb, uint32_t focusRgb) {
+    if (!gTtfReady || !text) return;
+    OverlayWord w;
+    w.text = text;
+    w.x = x;
+    w.y = y;
+    w.pixelHeight = pixelHeight;
+    w.focusIndex = focusIndex;
+    w.baseColor = baseRgb;
+    w.focusColor = focusRgb;
+    gOverlayQueue.push_back(std::move(w));
+}
 
 // Forward declaration (defined in Arduino.cpp extern linkage)
 // nothing extra needed — desktopPumpEvents is defined here
@@ -53,6 +244,7 @@ void axs15231bInit() {
     }
     // Nearest-neighbour: crisp scaled pixels, mirrors the device look.
     SDL_SetHint(SDL_HINT_RENDER_SCALE_QUALITY, "nearest");
+    initTtf();
     gWindow = SDL_CreateWindow(
         "rsvpnano",
         SDL_WINDOWPOS_CENTERED, SDL_WINDOWPOS_CENTERED,
@@ -135,6 +327,7 @@ void axs15231bPushColors(uint16_t x, uint16_t y, uint16_t width, uint16_t height
         SDL_UpdateTexture(gTexture, nullptr, gPixels, kLogW * sizeof(uint32_t));
         SDL_RenderClear(gRenderer);
         SDL_RenderCopy(gRenderer, gTexture, nullptr, nullptr);
+        renderOverlayQueue();
         SDL_RenderPresent(gRenderer);
     }
 }
@@ -189,12 +382,10 @@ void desktopPumpEvents() {
                                                 : App::DesktopAction::RightPress);
                         break;
                     case SDLK_UP:
-                        app.desktopAction(shift ? App::DesktopAction::UpFast
-                                                : App::DesktopAction::Up);
+                        app.desktopAction(App::DesktopAction::UpPress, shift ? 10 : 1);
                         break;
                     case SDLK_DOWN:
-                        app.desktopAction(shift ? App::DesktopAction::DownFast
-                                                : App::DesktopAction::Down);
+                        app.desktopAction(App::DesktopAction::DownPress, shift ? 10 : 1);
                         break;
                     case SDLK_t:
                         app.desktopAction(App::DesktopAction::ThemeCycle);
@@ -220,6 +411,12 @@ void desktopPumpEvents() {
                         break;
                     case SDLK_RIGHT:
                         app.desktopAction(App::DesktopAction::RightRelease);
+                        break;
+                    case SDLK_UP:
+                        app.desktopAction(App::DesktopAction::UpRelease);
+                        break;
+                    case SDLK_DOWN:
+                        app.desktopAction(App::DesktopAction::DownRelease);
                         break;
                     default:
                         break;
